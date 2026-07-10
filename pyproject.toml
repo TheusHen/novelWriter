@@ -28,6 +28,7 @@ dependencies = [
     "pyqt6>=6.4",
     "pyenchant>=3.3.0",
     "pyobjc; sys_platform == 'darwin'",
+    "keyring>=25.7.0",
 ]
 
 [dependency-groups]

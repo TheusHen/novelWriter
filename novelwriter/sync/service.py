@@ -18,8 +18,10 @@ import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from novelwriter.sync.conflicts import SyncConflict, SyncConflictError, loadConflicts, saveConflicts
 from novelwriter.sync.merge import mergeText
 from novelwriter.sync.model import SyncManifest, contentHash, utcNow
+from novelwriter.sync.nwd import composeNwd, splitNwd
 from novelwriter.sync.project import fileEntries, loadSyncState, projectFiles, saveSyncState, writeProjectFiles
 
 if TYPE_CHECKING:
@@ -48,6 +50,8 @@ class ProjectSynchroniser:
 
     def sync(self, projectPath: Path, projectId: str) -> SyncOutcome:
         """Reconcile local files with the remote head, then publish a revision."""
+        if conflicts := loadConflicts(projectPath, projectId):
+            raise SyncConflictError(tuple(entry.path for entry in conflicts))
         local = projectFiles(projectPath)
         head = self._remote.getHead(projectId)
         if head is None:
@@ -55,7 +59,7 @@ class ProjectSynchroniser:
             saveSyncState(projectPath, projectId, outcome.manifestHash)
             return outcome
 
-        remoteManifest = SyncManifest.fromBytes(self._remote.getManifest(head.manifestHash))
+        remoteManifest = self._readManifest(head.manifestHash)
         if remoteManifest.projectId != projectId:
             raise ValueError("Synchronisation manifest belongs to another project")
         remote = self._readFiles(remoteManifest)
@@ -65,28 +69,31 @@ class ProjectSynchroniser:
                 raise RuntimeError("Download the project before synchronising this device")
             saveSyncState(projectPath, projectId, head.manifestHash)
             return SyncOutcome(remoteManifest.revision, 0, 0, (), head.manifestHash)
-        base = self._readFiles(SyncManifest.fromBytes(self._remote.getManifest(baseHash)))
+        base = self._readFiles(self._readManifest(baseHash))
         merged, conflicts, pulled = self._mergeFiles(base, local, remote)
         if merged != local:
             writeProjectFiles(projectPath, merged)
         if conflicts:
             saveSyncState(projectPath, projectId, head.manifestHash)
-            return SyncOutcome(remoteManifest.revision, pulled, 0, tuple(conflicts), head.manifestHash)
+            saveConflicts(projectPath, projectId, tuple(conflicts))
+            return SyncOutcome(
+                remoteManifest.revision, pulled, 0, tuple(entry.path for entry in conflicts), head.manifestHash
+            )
         if merged == remote:
             saveSyncState(projectPath, projectId, head.manifestHash)
             return SyncOutcome(remoteManifest.revision, pulled, 0, (), head.manifestHash)
-        outcome = self._publish(
-            projectId, merged, head.version, head.manifestHash, remoteManifest.revision, pulled, tuple(conflicts)
-        )
+        outcome = self._publish(projectId, merged, head.version, head.manifestHash, remoteManifest.revision, pulled, ())
         saveSyncState(projectPath, projectId, outcome.manifestHash)
         return outcome
 
     def pull(self, projectPath: Path, projectId: str) -> SyncOutcome:
         """Download the latest project revision to pair a new device."""
+        if conflicts := loadConflicts(projectPath, projectId):
+            raise SyncConflictError(tuple(entry.path for entry in conflicts))
         head = self._remote.getHead(projectId)
         if head is None:
             raise RuntimeError("The project has not been uploaded yet")
-        manifest = SyncManifest.fromBytes(self._remote.getManifest(head.manifestHash))
+        manifest = self._readManifest(head.manifestHash)
         if manifest.projectId != projectId:
             raise ValueError("Synchronisation manifest belongs to another project")
         files = self._readFiles(manifest)
@@ -123,16 +130,36 @@ class ProjectSynchroniser:
             files[path] = data
         return files
 
+    def _readManifest(self, manifestHash: str) -> SyncManifest:
+        """Read a manifest only after verifying its content address."""
+        data = self._remote.getManifest(manifestHash)
+        if contentHash(data) != manifestHash:
+            raise RuntimeError("Synchronisation remote returned a corrupt manifest")
+        return SyncManifest.fromBytes(data)
+
     def _mergeFiles(
         self, base: dict[str, bytes], local: dict[str, bytes], remote: dict[str, bytes]
-    ) -> tuple[dict[str, bytes], list[str], int]:
+    ) -> tuple[dict[str, bytes], list[SyncConflict], int]:
         result: dict[str, bytes] = {}
-        conflicts: list[str] = []
+        conflicts: list[SyncConflict] = []
         pulled = 0
         for path in sorted(set(base) | set(local) | set(remote)):
             baseData = base.get(path)
             localData = local.get(path)
             remoteData = remote.get(path)
+            if (
+                path.endswith(".nwd")
+                and isinstance(baseData, bytes)
+                and isinstance(localData, bytes)
+                and isinstance(remoteData, bytes)
+            ):
+                merged, conflict = self._mergeDocument(baseData, localData, remoteData)
+                if conflict:
+                    conflicts.append(SyncConflict(path, baseData, localData, remoteData))
+                else:
+                    result[path] = merged
+                    pulled += int(merged != localData)
+                continue
             if localData == remoteData:
                 if localData is not None:
                     result[path] = localData
@@ -152,12 +179,30 @@ class ProjectSynchroniser:
                     pulled += 1
                 continue
             if remoteData is not None and path.endswith(".nwd") and baseData is not None:
-                merged = mergeText(baseData.decode("utf-8"), localData.decode("utf-8"), remoteData.decode("utf-8"))
-                result[path] = merged.text.encode("utf-8")
-                pulled += 1
-                if merged.hasConflicts:
-                    conflicts.append(path)
+                merged, conflict = self._mergeDocument(baseData, localData, remoteData)
+                if conflict:
+                    conflicts.append(SyncConflict(path, baseData, localData, remoteData))
+                else:
+                    result[path] = merged
+                    pulled += int(merged != localData)
             else:
                 result[path] = localData
-                conflicts.append(path)
+                conflicts.append(SyncConflict(path, baseData, localData, remoteData))
         return result, conflicts, pulled
+
+    @staticmethod
+    def _mergeDocument(baseData: bytes, localData: bytes, remoteData: bytes) -> tuple[bytes, bool]:
+        """Merge user-authored body text while excluding volatile NWD metadata."""
+        base = splitNwd(baseData)
+        local = splitNwd(localData)
+        remote = splitNwd(remoteData)
+        if local.body == remote.body:
+            return localData, False
+        if local.body == base.body:
+            return remoteData, False
+        if remote.body == base.body:
+            return localData, False
+        merged = mergeText(base.body, local.body, remote.body)
+        if merged.hasConflicts:
+            return localData, True
+        return composeNwd(local if local.header else remote, merged.text), False

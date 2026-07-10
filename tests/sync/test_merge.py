@@ -25,8 +25,8 @@ def testMergeText_IndependentChanges():
 
 
 def testMergeText_OverlappingChanges():
-    """Overlapping changes are preserved as a conflict."""
+    """Overlapping changes return a conflict without synthetic text."""
     result = mergeText("First\n", "One\n", "Uno\n")
 
-    assert result.text == "<<<<<<< LOCAL\nOne\n=======\nUno\n>>>>>>> REMOTE\n"
+    assert result.text == ""
     assert result.hasConflicts is True

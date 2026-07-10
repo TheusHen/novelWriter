@@ -182,6 +182,17 @@ class GuiMainMenu(QMenuBar):
         self.aNonfictionWorkspace = qtAddAction(self.projMenu, self.tr("Create Non-Fiction Workspace"))
         self.aNonfictionWorkspace.triggered.connect(self.mainGui.createNonfictionWorkspace)
 
+        # Project > Google Drive
+        self.aConnectGoogleDrive = qtAddAction(self.projMenu, self.tr("Connect Google Drive"))
+        self.aConnectGoogleDrive.triggered.connect(self.mainGui.connectGoogleDrive)
+
+        self.aSyncGoogleDrive = qtAddAction(self.projMenu, self.tr("Synchronise with Google Drive"))
+        self.aSyncGoogleDrive.setShortcut("Ctrl+Shift+G")
+        self.aSyncGoogleDrive.triggered.connect(self.mainGui.syncGoogleDrive)
+
+        self.aDownloadGoogleDrive = qtAddAction(self.projMenu, self.tr("Download Latest Google Drive Version"))
+        self.aDownloadGoogleDrive.triggered.connect(self.mainGui.downloadGoogleDrive)
+
         # Project > Novel Details
         self.aNovelDetails = qtAddAction(self.projMenu, self.tr("Novel Details"))
         self.aNovelDetails.setShortcut("Shift+F6")

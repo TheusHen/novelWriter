@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <title>novelWriter · Mobile</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="stylesheet" href="./styles.css" />
+    <meta name="theme-color" content="#1f1f24" />
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>novelWriter</h1>
+        <div class="subtitle">Companion móvel — sincronizado via Google Drive</div>
+      </div>
+    </header>
+
+    <section class="section" data-section="connect">
+      <div class="card">
+        <h2>Conectar</h2>
+        <p class="muted">
+          Abra este aplicativo no celular, cole o seu OAuth Client ID do Google,
+          digite o UUID do projeto (em <code>Configurações do Projeto</code> no desktop) e conecte-se.
+        </p>
+        <label class="muted" for="client-id">Google OAuth Client ID</label>
+        <input id="client-id" type="text" data-client-id placeholder="xxxxxxxxxxxx.apps.googleusercontent.com" />
+
+        <label class="muted" for="project-id">Project UUID</label>
+        <input id="project-id" type="text" data-project-id placeholder="Cole aqui o UUID do projeto" />
+
+        <div class="row" style="margin-top:0.75rem;">
+          <button data-connect-btn>Conectar com Google</button>
+        </div>
+        <div class="status info" data-status="connect" style="margin-top:0.75rem;">
+          Aguardando configuração.
+        </div>
+      </div>
+    </section>
+
+    <section class="section" data-section="notes">
+      <div class="card">
+        <h2>Snapshot mais recente</h2>
+        <div class="row">
+          <button class="secondary" data-load-snapshot>Atualizar do Drive</button>
+        </div>
+        <div class="status info" data-status="notes" style="margin-top:0.5rem;">
+          Sincronização manual.
+        </div>
+        <pre data-snapshot class="muted" style="white-space: pre-wrap; margin-top:0.75rem;">Nenhum documento carregado.</pre>
+      </div>
+
+      <div class="card">
+        <h2>Anotações rápidas</h2>
+        <textarea data-note-input rows="4" placeholder="Ideias, cenas, referências..."></textarea>
+        <div class="row" style="margin-top:0.5rem;">
+          <button data-add-note>Salvar nota</button>
+          <button class="secondary" data-export-notes>Exportar JSON</button>
+          <button class="secondary" data-clear-notes>Limpar tudo</button>
+        </div>
+        <ul class="list" data-notes-list style="margin-top:0.75rem;"></ul>
+      </div>
+    </section>
+
+    <footer class="muted" style="text-align:center;">
+      As notas vivem só neste dispositivo até serem sincronizadas pelo desktop.
+    </footer>
+  </body>
+</html>

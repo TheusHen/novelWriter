@@ -109,11 +109,13 @@ class SyncManifest:
             raise ValueError("Invalid synchronisation parent")
         if not isinstance(files, dict) or any(not isinstance(path, str) or not path for path in files):
             raise ValueError("Invalid synchronisation files")
+        if any(not isinstance(entry, dict) for entry in files.values()):
+            raise ValueError("Invalid synchronisation file entry")
         return cls(
             raw["projectId"],
             raw["deviceId"],
             revision,
             parent,
             raw["createdAt"],
-            {path: SyncFile.unpack(entry) for path, entry in files.items() if isinstance(entry, dict)},
+            {path: SyncFile.unpack(entry) for path, entry in files.items()},
         )

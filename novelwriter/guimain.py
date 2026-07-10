@@ -61,6 +61,8 @@ from novelwriter.gui.search import GuiProjectSearch
 from novelwriter.gui.sidebar import GuiSideBar
 from novelwriter.gui.statusbar import GuiMainStatus
 from novelwriter.manuscript.manuscript import GuiManuscript
+from novelwriter.sync.auth import GoogleAuthError, GoogleCredentialStore, OAuthClient, OAuthToken
+from novelwriter.sync.runnables import GoogleConnectTask, GoogleSyncTask
 from novelwriter.tools.dictionaries import GuiDictionaries
 from novelwriter.tools.noveldetails import GuiNovelDetails
 from novelwriter.tools.welcome import GuiWelcome
@@ -523,6 +525,94 @@ class GuiMain(QMainWindow):
             return
         self.saveProject()
         SHARED.info(self.tr("Created the non-fiction workspace."))
+
+    def connectGoogleDrive(self) -> None:
+        """Connect this desktop installation to the user's Google Drive."""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            self.tr("Select Desktop Google OAuth Client"),
+            filter=self.tr("Google OAuth Client (*.json)"),
+        )
+        if not path:
+            return
+        try:
+            task = GoogleConnectTask(OAuthClient.fromFile(Path(path)))
+        except GoogleAuthError as exc:
+            SHARED.error(str(exc))
+            return
+        task.signals.connected.connect(self._googleDriveConnected)
+        task.signals.failed.connect(self._googleDriveConnectFailed)
+        SHARED.newStatusMessage(self.tr("Waiting for Google Drive authorisation ..."))
+        SHARED.runInThreadPool(task)
+
+    def syncGoogleDrive(self) -> None:
+        """Save and synchronise this project with its Google Drive revision."""
+        self._startGoogleDriveTask("sync")
+
+    def downloadGoogleDrive(self) -> None:
+        """Replace this project with its latest Google Drive revision."""
+        if not SHARED.question(
+            self.tr("Download and replace the local project with the latest Google Drive version?"), warn=True
+        ):
+            return
+        self._startGoogleDriveTask("pull")
+
+    def _googleDriveConnected(self, client: OAuthClient, token: object) -> None:
+        """Persist a newly authorised Google Drive desktop connection."""
+        if not isinstance(token, OAuthToken):
+            SHARED.error(self.tr("Google authorisation returned an invalid token."))
+            return
+        try:
+            GoogleCredentialStore().save(client, token)
+        except GoogleAuthError as exc:
+            SHARED.error(str(exc))
+            return
+        SHARED.info(self.tr("Google Drive is connected."))
+
+    def _googleDriveConnectFailed(self, reason: str) -> None:
+        """Report a failed browser-based Google Drive connection."""
+        SHARED.error(self.tr("Could not connect Google Drive."), info=reason)
+
+    def _startGoogleDriveTask(self, operation: str) -> None:
+        """Close the project before a background process changes its files."""
+        if not SHARED.hasProject:
+            return
+        if not GoogleCredentialStore().isConnected:
+            SHARED.warn(self.tr("Connect Google Drive before synchronising."))
+            return
+        project = SHARED.project
+        projectPath = project.storage.storagePath
+        projectId = project.data.uuid
+        if projectPath is None or not projectId:
+            SHARED.error(self.tr("Could not locate the current project for synchronisation."))
+            return
+        self.saveDocument()
+        self.saveProject()
+        self.closeProject(isYes=True)
+        task = GoogleSyncTask(projectPath, projectId, operation)
+        task.signals.finished.connect(self._googleDriveTaskFinished)
+        task.signals.failed.connect(self._googleDriveTaskFailed)
+        self._googleSyncPath = projectPath
+        SHARED.newStatusMessage(self.tr("Synchronising Google Drive ..."))
+        SHARED.runInThreadPool(task)
+
+    def _googleDriveTaskFinished(self, operation: str, outcome: object) -> None:
+        """Reopen the project after its files have been synchronised."""
+        path = getattr(self, "_googleSyncPath", None)
+        if isinstance(path, Path):
+            self.openProject(path)
+        conflicts = getattr(outcome, "conflicts", ())
+        if conflicts:
+            SHARED.warn(self.tr("Synchronisation needs conflict resolution."), details="\n".join(conflicts))
+        else:
+            SHARED.newStatusMessage(self.tr("Google Drive synchronisation completed."))
+
+    def _googleDriveTaskFailed(self, operation: str, reason: str) -> None:
+        """Reopen the local project and report a failed synchronisation."""
+        path = getattr(self, "_googleSyncPath", None)
+        if isinstance(path, Path):
+            self.openProject(path)
+        SHARED.error(self.tr("Google Drive synchronisation failed."), info=reason)
 
     ##
     #  Document Actions
