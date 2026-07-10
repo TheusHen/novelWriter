@@ -140,6 +140,7 @@ jobs:
           cp mobile-pwa/service-worker.js dist/pwa/service-worker.js
           cp mobile-pwa/app.js dist/pwa/app.js
           cp mobile-pwa/styles.css dist/pwa/styles.css
+          cp -R mobile-pwa/icons dist/pwa/icons
           ls -la dist/pwa
 
       - name: Upload PWA artefact
@@ -176,6 +177,7 @@ jobs:
           cp mobile-pwa/service-worker.js dist/pwa/service-worker.js
           cp mobile-pwa/app.js dist/pwa/app.js
           cp mobile-pwa/styles.css dist/pwa/styles.css
+          cp -R mobile-pwa/icons dist/pwa/icons
 
       - name: Upload Pages artefact
         uses: actions/upload-pages-artifact@v3
