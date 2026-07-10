@@ -11,6 +11,5 @@ jobs:
   buildWin-X64:
     needs: buildAssets
     uses: ./.github/workflows/part_win_x64.yml
-    secrets: inherit
     permissions:
       contents: read
