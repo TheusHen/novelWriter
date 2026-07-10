@@ -48,4 +48,5 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: true
+          # Forks without CODECOV_TOKEN should not fail the whole matrix
+          fail_ci_if_error: false

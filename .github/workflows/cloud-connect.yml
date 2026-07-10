@@ -16,135 +16,145 @@ on:
           - status
           - revoke
         default: status
-  workflow_call:
 
 permissions:
   contents: read
 
 jobs:
   status:
-    if: github.event.inputs.operation == 'status' || github.event_name == 'workflow_call'
+    if: inputs.operation == 'status'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Verify Google credentials provided as secrets
-        id: verify
         env:
           CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
           REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
-          PROJECT_UUID: ${{ github.event.inputs.project_uuid }}
         run: |
           set -euo pipefail
-          if [ -z "${CLIENT_ID}" ]; then echo "::warning::GOOGLE_OAUTH_CLIENT_ID secret não definido"; fi
-          if [ -z "${CLIENT_SECRET}" ]; then echo "::warning::GOOGLE_OAUTH_CLIENT_SECRET secret não definido"; fi
-          if [ -z "${REFRESH_TOKEN}" ]; then echo "::warning::GOOGLE_OAUTH_REFRESH_TOKEN secret não definido"; fi
-          if [ -n "${CLIENT_ID}${CLIENT_SECRET}${REFRESH_TOKEN}" ]; then
-            python - <<'PY'
-            import os, json, urllib.request
-            client_id = os.environ["CLIENT_ID"]
-            client_secret = os.environ["CLIENT_SECRET"]
-            refresh = os.environ["REFRESH_TOKEN"]
-            body = urllib.parse.urlencode({
+          if [ -z "${CLIENT_ID}" ]; then echo "::warning::GOOGLE_OAUTH_CLIENT_ID secret is not set"; fi
+          if [ -z "${CLIENT_SECRET}" ]; then echo "::warning::GOOGLE_OAUTH_CLIENT_SECRET secret is not set"; fi
+          if [ -z "${REFRESH_TOKEN}" ]; then echo "::warning::GOOGLE_OAUTH_REFRESH_TOKEN secret is not set"; fi
+          if [ -z "${CLIENT_ID}${CLIENT_SECRET}${REFRESH_TOKEN}" ]; then
+            echo "::notice::No Google OAuth secrets configured. Skipping live token check."
+            exit 0
+          fi
+          python - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          client_id = os.environ["CLIENT_ID"]
+          client_secret = os.environ["CLIENT_SECRET"]
+          refresh = os.environ["REFRESH_TOKEN"]
+          body = urllib.parse.urlencode({
               "client_id": client_id,
               "client_secret": client_secret,
               "refresh_token": refresh,
               "grant_type": "refresh_token",
-            }).encode()
-            req = urllib.request.Request(
+          }).encode()
+          req = urllib.request.Request(
               "https://oauth2.googleapis.com/token",
               data=body,
               headers={"Content-Type": "application/x-www-form-urlencoded"},
-            )
-            try:
+          )
+          try:
               with urllib.request.urlopen(req, timeout=30) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+                  payload = json.loads(response.read().decode("utf-8"))
               if "access_token" in payload:
-                print("::notice::Tokens Google ativos. Pair de dispositivos é válido.")
+                  print("::notice::Google tokens are active. Device pairing is valid.")
               else:
-                print("::error::Tokens Google inválidos.")
-            except Exception as exc:
-              print(f"::error::Falha ao trocar refresh token: {exc}")
-            PY
-          fi
+                  print("::error::Google tokens are invalid.")
+                  raise SystemExit(1)
+          except urllib.error.HTTPError as exc:
+              print(f"::error::Failed to refresh Google token: HTTP {exc.code}")
+              raise SystemExit(1)
+          except Exception as exc:
+              print(f"::error::Failed to refresh Google token: {exc}")
+              raise SystemExit(1)
+          PY
 
       - name: Publish status report
         run: |
           cat <<'EOF' >> "$GITHUB_STEP_SUMMARY"
-          ## Estado do Cloud Connect
+          ## Cloud Connect Status
 
-          | Item | Valor |
+          | Item | Value |
           | ---- | ----- |
-          | Project UUID | `${{ github.event.inputs.project_uuid }}` |
-          | Operação | `${{ github.event.inputs.operation }}` |
+          | Project UUID | `${{ inputs.project_uuid }}` |
+          | Operation | `${{ inputs.operation }}` |
           | Run | #${{ github.run_number }} |
-          | Acionado por | `${{ github.actor }}` |
+          | Triggered by | `${{ github.actor }}` |
 
-          Quando o token expira ou você troca de dispositivo, gere um novo
-          refresh token rodando `novelwriter > Project > Connect Google Drive`
-          no desktop e atualize os secrets do repositório (`Settings → Secrets and variables → Actions`).
+          When the token expires or you change device, generate a new refresh
+          token from **Project → Connect Google Drive** on the desktop, then
+          update the repository secrets under
+          **Settings → Secrets and variables → Actions**.
 
           EOF
 
   pair:
-    if: github.event.inputs.operation == 'pair'
-    needs: status
+    if: inputs.operation == 'pair'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
       - name: Read pair code
         id: pair-code
         run: |
-          code=$(grep -v "^$" <<'EOF' | shuf -n1
-          swift-quasar-7421
-          quiet-orbit-2039
-          friendly-kestrel-5578
-          bright-falcon-1904
-          EOF
-          )
+          code=$(printf '%s\n' \
+            'swift-quasar-7421' \
+            'quiet-orbit-2039' \
+            'friendly-kestrel-5578' \
+            'bright-falcon-1904' | shuf -n1)
           echo "pair-code=$code" >> "$GITHUB_OUTPUT"
 
-      - name: Comment with pairing instructions
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const code = '${{ steps.pair-code.outputs.pair-code }}';
-            const uuid = '${{ github.event.inputs.project_uuid }}';
-            await core.summary.addHeading('Cloud Connect — pair', 2).addTable([
-              [{data: 'Code', header: true}, {data: code, header: false}],
-              [{data: 'Project UUID', header: true}, {data: uuid, header: false}],
-              [{data: 'Tempo de expiração', header: true}, {data: '15 minutos', header: false}],
-            ]).write();
+      - name: Write pairing instructions
+        run: |
+          cat <<EOF >> "$GITHUB_STEP_SUMMARY"
+          ## Cloud Connect — Pair
+
+          | Item | Value |
+          | ---- | ----- |
+          | Code | \`${{ steps.pair-code.outputs.pair-code }}\` |
+          | Project UUID | \`${{ inputs.project_uuid }}\` |
+          | Validity | 15 minutes |
+
+          1. Open the project on the desktop.
+          2. Confirm the project UUID matches the value above.
+          3. Use **Project → Connect Google Drive** if credentials are not yet stored.
+          4. On mobile, open the companion PWA and enter the same project UUID.
+
+          EOF
 
   revoke:
-    if: github.event.inputs.operation == 'revoke'
+    if: inputs.operation == 'revoke'
     runs-on: ubuntu-latest
     steps:
       - name: Document the revoke steps
         run: |
           cat <<'EOF' >> "$GITHUB_STEP_SUMMARY"
-          ## Revogação manual
+          ## Manual Revocation
 
-          A revogação só pode acontecer no desktop do proprietário:
+          Revocation must be performed on the owner's desktop:
 
-          1. Abra o projeto.
-          2. Apague `~/.config/novelwriter/google-token.json` (Linux),
-             `%APPDATA%/novelwriter/google-token.json` (Windows) ou
-             `~/Library/Application Support/novelwriter/google-token.json` (macOS).
-          3. Revogue o aplicativo em
-             https://myaccount.google.com/permissions.
-          4. Rode o workflow `Cloud Connect` com `operation=pair` para gerar um novo código.
+          1. Open the project.
+          2. Delete the stored credential file if present:
+             - Linux: `~/.local/share/novelwriter/google-token.json`
+             - Windows: `%LOCALAPPDATA%/novelwriter/google-token.json`
+             - macOS: `~/Library/Application Support/novelwriter/google-token.json`
+          3. Clear the OS keyring entry named `novelWriter.googleDrive` if present.
+          4. Revoke the application at https://myaccount.google.com/permissions.
+          5. Re-run this workflow with `operation=pair` after reconnecting.
 
-          Limpar apenas os secrets do repositório não invalida tokens já emitidos.
+          Clearing repository secrets alone does not invalidate tokens already issued.
           EOF
 
   publish-pwa:
-    if: github.event.inputs.operation == 'pair'
-    needs: pair
+    if: inputs.operation == 'pair'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -154,6 +164,9 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Build PWA
         run: |
           set -euo pipefail
@@ -163,9 +176,13 @@ jobs:
           cp mobile-pwa/service-worker.js dist/pwa/service-worker.js
           cp mobile-pwa/app.js dist/pwa/app.js
           cp mobile-pwa/styles.css dist/pwa/styles.css
+          ls -la dist/pwa
+
+      - name: Upload Pages artefact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/pwa
 
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-        with:
-          artifact_name: novelwriter-mobile-pwa

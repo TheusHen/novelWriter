@@ -85,6 +85,23 @@ def testProjectSynchroniser_PullsProjectToNewDevice(tmp_path):
     assert _documentBody(_readDocument(target)) == "Write anywhere\n"
 
 
+def testProjectSynchroniser_PullRequiresRemoteHead(tmp_path):
+    """Pull fails clearly when the project was never uploaded."""
+    with pytest.raises(RuntimeError, match="not been uploaded"):
+        ProjectSynchroniser(MemoryRemote(), "mobile").pull(tmp_path / "empty", PROJECT_ID)
+
+
+def testProjectSynchroniser_IdempotentWhenUnchanged(tmp_path):
+    """A second sync with no local edits does not create a revision."""
+    remote = MemoryRemote()
+    path = _makeProject(tmp_path / "project", _nwd("Stable\n"))
+    first = ProjectSynchroniser(remote, "desktop").sync(path, PROJECT_ID)
+    second = ProjectSynchroniser(remote, "desktop").sync(path, PROJECT_ID)
+    assert first.revision == 1
+    assert second.revision == 1
+    assert second.pushedFiles == 0
+
+
 def _makeProject(path: Path, text: str) -> Path:
     (path / "content").mkdir(parents=True)
     (path / "nwProject.nwx").write_text("project", encoding="utf-8")

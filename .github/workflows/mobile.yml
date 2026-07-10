@@ -22,7 +22,9 @@ permissions:
 
 jobs:
   build-android:
-    if: github.event.inputs.target == 'android' || startsWith(github.ref, 'refs/tags/v')
+    if: >
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'android')
+      || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -61,7 +63,7 @@ jobs:
           briefcase package android 2>&1 | tee briefcase-package.log
           PACKAGE_RC=${PIPESTATUS[0]}
           if [ $CREATE_RC -ne 0 ] || [ $BUILD_RC -ne 0 ] || [ $PACKAGE_RC -ne 0 ]; then
-            echo "Briefcase packaging unavailable in this environment. Producing a static Android assets bundle instead." >> "$GITHUB_STEP_SUMMARY"
+            echo "Briefcase packaging is unavailable in this environment. Uploading a static Android assets bundle instead." >> "$GITHUB_STEP_SUMMARY"
             echo "briefcase_failed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -73,7 +75,7 @@ jobs:
         with:
           name: novelwriter-android-debug
           path: |
-            android/gradle/wrapper/gradle-wrapper.jar
+            android/**
           if-no-files-found: ignore
           retention-days: 14
 
@@ -82,14 +84,13 @@ jobs:
         with:
           name: novelwriter-mobile-assets
           path: |
-            docs/build/**
             docs/source/index.rst
             novelwriter/assets/**
           if-no-files-found: ignore
           retention-days: 14
 
   build-ios:
-    if: github.event.inputs.target == 'ios'
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'ios'
     runs-on: macos-latest
     timeout-minutes: 90
     steps:
@@ -116,22 +117,19 @@ jobs:
         with:
           name: novelwriter-mobile-assets
           path: |
-            docs/build/**
             novelwriter/assets/**
           if-no-files-found: ignore
           retention-days: 14
 
   build-pwa:
-    if: github.event.inputs.target == 'pwa'
+    if: >
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'pwa')
+      || startsWith(github.ref, 'refs/tags/v')
+      || github.event_name == 'workflow_call'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
 
       - name: Build Progressive Web App companion
         run: |
@@ -149,11 +147,13 @@ jobs:
         with:
           name: novelwriter-mobile-pwa
           path: dist/pwa/**
-          if-no-files-found: ignore
+          if-no-files-found: error
           retention-days: 14
 
   publish-pwa:
-    if: github.event.inputs.target == 'pwa' || startsWith(github.ref, 'refs/tags/v')
+    if: >
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'pwa')
+      || startsWith(github.ref, 'refs/tags/v')
     needs: build-pwa
     runs-on: ubuntu-latest
     permissions:
@@ -164,8 +164,24 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Progressive Web App companion
+        run: |
+          set -euo pipefail
+          mkdir -p dist/pwa
+          cp mobile-pwa/index.html dist/pwa/index.html
+          cp mobile-pwa/manifest.webmanifest dist/pwa/manifest.webmanifest
+          cp mobile-pwa/service-worker.js dist/pwa/service-worker.js
+          cp mobile-pwa/app.js dist/pwa/app.js
+          cp mobile-pwa/styles.css dist/pwa/styles.css
+
+      - name: Upload Pages artefact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/pwa
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-        with:
-          artifact_name: novelwriter-mobile-pwa

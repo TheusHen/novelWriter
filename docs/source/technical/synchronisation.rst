@@ -1,8 +1,8 @@
 .. _docs_technical_synchronisation:
 
-**********************
+*************************
 Cross-Device Sync Design
-**********************
+*************************
 
 The cross-device protocol uses Google Drive as a private content store. It is
 designed for a desktop application and a native mobile companion that work

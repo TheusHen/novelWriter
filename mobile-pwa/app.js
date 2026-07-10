@@ -10,7 +10,8 @@ const STORAGE = {
   TOKEN: "novelwriter:googleToken",
   PROJECT_ID: "novelwriter:projectId",
   DEVICE_ID: "novelwriter:deviceId",
-  CLIENT_ID: "novelwriter:googleClientId"
+  CLIENT_ID: "novelwriter:googleClientId",
+  CODE_VERIFIER: "novelwriter:codeVerifier"
 };
 
 const state = {
@@ -81,14 +82,6 @@ function escapeHtml(text) {
   })[char]);
 }
 
-async function sha256(value) {
-  const encoder = new TextEncoder().encode(value);
-  const buffer = await crypto.subtle.digest("SHA-256", encoder);
-  return Array.from(new Uint8Array(buffer))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
 function base64UrlEncode(buffer) {
   let str = "";
   for (const byte of new Uint8Array(buffer)) {
@@ -97,15 +90,19 @@ function base64UrlEncode(buffer) {
   return btoa(str).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
 }
 
+async function sha256Buffer(value) {
+  return crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+}
+
 async function startGoogleAuth() {
   const clientId = document.querySelector("[data-client-id]").value.trim();
   const projectId = document.querySelector("[data-project-id]").value.trim();
   if (!clientId) {
-    setStatus("connect", "Informe o OAuth Client ID do Google.", "bad");
+    setStatus("connect", "Enter the Google OAuth Client ID.", "bad");
     return;
   }
   if (!projectId) {
-    setStatus("connect", "Informe o Project UUID que aparece em Configurações do Projeto.", "bad");
+    setStatus("connect", "Enter the project UUID from Project Settings on the desktop.", "bad");
     return;
   }
 
@@ -114,14 +111,8 @@ async function startGoogleAuth() {
   ensureDeviceId();
 
   const verifier = base64UrlEncode(crypto.getRandomValues(new Uint8Array(48)));
-  localStorage.setItem("novelwriter:codeVerifier", verifier);
-  const challenge = base64UrlEncode(await sha256(verifier).then((hex) => {
-    const out = new Uint8Array(hex.length / 2);
-    for (let i = 0; i < out.length; i += 1) {
-      out[i] = parseInt(hex.substr(i * 2, 2), 16);
-    }
-    return out.buffer;
-  }));
+  localStorage.setItem(STORAGE.CODE_VERIFIER, verifier);
+  const challenge = base64UrlEncode(await sha256Buffer(verifier));
 
   const redirect = `${location.origin}${location.pathname}`;
   const params = new URLSearchParams({
@@ -139,7 +130,7 @@ async function startGoogleAuth() {
 }
 
 async function exchangeCodeForToken(code, projectId) {
-  const verifier = localStorage.getItem("novelwriter:codeVerifier");
+  const verifier = localStorage.getItem(STORAGE.CODE_VERIFIER);
   if (!verifier) {
     return;
   }
@@ -160,7 +151,7 @@ async function exchangeCodeForToken(code, projectId) {
     body
   });
   if (!response.ok) {
-    setStatus("connect", "Falha ao trocar o código por token.", "bad");
+    setStatus("connect", "Failed to exchange the authorisation code for a token.", "bad");
     return;
   }
   const data = await response.json();
@@ -170,9 +161,10 @@ async function exchangeCodeForToken(code, projectId) {
     expiresAt: Date.now() + (data.expires_in * 1000)
   };
   localStorage.setItem(STORAGE.TOKEN, JSON.stringify(token));
+  localStorage.removeItem(STORAGE.CODE_VERIFIER);
   state.connected = true;
   state.projectId = projectId;
-  setStatus("connect", "Conectado ao Google Drive.", "good");
+  setStatus("connect", "Connected to Google Drive.", "good");
   showSection("notes");
 }
 
@@ -205,7 +197,7 @@ async function refreshToken() {
 
 async function callDrive(path, init = {}) {
   const token = await refreshToken();
-  if (!token) throw new Error("Não conectado ao Google Drive.");
+  if (!token) throw new Error("Not connected to Google Drive.");
   const headers = Object.assign({ Authorization: `Bearer ${token}` }, init.headers || {});
   const response = await fetch(`https://www.googleapis.com/drive/v3${path}`, {
     ...init,
@@ -217,44 +209,50 @@ async function callDrive(path, init = {}) {
   return response;
 }
 
+async function findAppDataFile(name) {
+  const escaped = name.replace(/'/g, "\\'");
+  const query = encodeURIComponent(`name = '${escaped}' and trashed = false`);
+  const response = await callDrive(
+    `/files?spaces=appDataFolder&q=${query}&fields=files(id,name)`
+  );
+  const data = await response.json();
+  return data.files && data.files.length ? data.files[0] : null;
+}
+
 async function loadSnapshot() {
   const projectId = localStorage.getItem(STORAGE.PROJECT_ID);
   if (!projectId) {
-    setStatus("notes", "Conecte-se primeiro.", "warn");
+    setStatus("notes", "Connect first.", "warn");
     return;
   }
   try {
-    const encodedName = `nw-sync-head-${projectId}`.replace(/'/g, "\\'");
-    const list = await callDrive(`/files?spaces=appDataFolder&q=name='${encodedName}' and trashed=false&fields=files(id,name)`);
-    const data = await list.json();
-    if (!data.files || data.files.length === 0) {
-      setStatus("notes", "Projeto ainda não foi sincronizado a partir do desktop.", "warn");
+    const head = await findAppDataFile(`nw-sync-head-${projectId}`);
+    if (!head) {
+      setStatus("notes", "The project has not been synchronised from the desktop yet.", "warn");
       return;
     }
-    const headResp = await callDrive(`/files/${data.files[0].id}?alt=media`);
+    const headResp = await callDrive(`/files/${head.id}?alt=media`);
     const manifestHash = (await headResp.text()).trim();
-    const manifestResp = await callDrive(`/files?q=name='nw-sync-manifest-${manifestHash}' and trashed=false&fields=files(id)`);
-    const manifestList = await manifestResp.json();
-    if (!manifestList.files || manifestList.files.length === 0) {
-      setStatus("notes", "Manifesto não encontrado no Drive.", "warn");
+    const manifestFile = await findAppDataFile(`nw-sync-manifest-${manifestHash}`);
+    if (!manifestFile) {
+      setStatus("notes", "Manifest not found in Drive.", "warn");
       return;
     }
-    const manifestData = await (await callDrive(`/files/${manifestList.files[0].id}?alt=media`)).json();
+    const manifestData = await (await callDrive(`/files/${manifestFile.id}?alt=media`)).json();
     const files = manifestData.files || {};
     const sorted = Object.keys(files).slice(0, 5);
     let preview = "";
     for (const path of sorted) {
-      const objResp = await callDrive(`/files?q=name='nw-sync-object-${files[path].hash}' and trashed=false&fields=files(id)`);
-      const objList = await objResp.json();
-      if (!objList.files || objList.files.length === 0) continue;
-      const obj = await (await callDrive(`/files/${objList.files[0].id}?alt=media`)).text();
+      const objectFile = await findAppDataFile(`nw-sync-object-${files[path].hash}`);
+      if (!objectFile) continue;
+      const obj = await (await callDrive(`/files/${objectFile.id}?alt=media`)).text();
       preview += `### ${path}\n\n${obj.split("\n").slice(0, 12).join("\n")}\n\n`;
     }
     state.snapshot = preview;
-    document.querySelector("[data-snapshot]").textContent = preview || "Nenhum documento legível encontrado.";
-    setStatus("notes", "Snapshot carregado.", "good");
+    document.querySelector("[data-snapshot]").textContent = preview || "No readable document found.";
+    setStatus("notes", "Snapshot loaded.", "good");
   } catch (err) {
-    setStatus("notes", `Falha: ${err.message}`, "bad");
+    setStatus("notes", `Failed: ${err.message}`, "bad");
   }
 }
 
@@ -274,7 +272,7 @@ function addNote() {
 }
 
 function clearNotes() {
-  if (!confirm("Apagar todas as notas deste dispositivo?")) return;
+  if (!confirm("Delete all notes on this device?")) return;
   state.notes = [];
   persistNotes(state.notes);
   renderNotes();
@@ -297,6 +295,15 @@ function boot() {
   ensureDeviceId();
   state.notes = loadNotes();
   renderNotes();
+
+  const savedClient = localStorage.getItem(STORAGE.CLIENT_ID);
+  const savedProject = localStorage.getItem(STORAGE.PROJECT_ID);
+  if (savedClient) {
+    document.querySelector("[data-client-id]").value = savedClient;
+  }
+  if (savedProject) {
+    document.querySelector("[data-project-id]").value = savedProject;
+  }
 
   const params = new URLSearchParams(location.search);
   const code = params.get("code");

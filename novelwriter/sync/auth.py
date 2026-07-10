@@ -14,8 +14,10 @@ the Free Software Foundation, either version 3 of the License, or
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import json
+import logging
 import secrets
 import time
 import webbrowser
@@ -26,16 +28,23 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import Request, urlopen
 
-import keyring
-
+from novelwriter import CONFIG
 from novelwriter.sync.googledrive import DRIVE_SCOPE, GoogleDriveRemote
+
+try:
+    import keyring
+except ImportError:  # pragma: no cover
+    keyring = None  # type: ignore[assignment]
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 
+logger = logging.getLogger(__name__)
+
 KEYRING_SERVICE = "novelWriter.googleDrive"
 KEYRING_USER = "desktop-oauth"
+TOKEN_FILE = "google-token.json"
 
 
 class GoogleAuthError(RuntimeError):
@@ -169,27 +178,58 @@ class GoogleOAuth:
     def _makeToken(values: dict[str, Any], refresh: str) -> OAuthToken:
         access = values.get("access_token")
         lifetime = values.get("expires_in")
-        if not isinstance(access, str) or not access or not isinstance(lifetime, int):
+        if not isinstance(access, str) or not access or not isinstance(lifetime, int | float):
             raise GoogleAuthError("Google returned an incomplete OAuth token")
-        return OAuthToken(access, refresh, time.time() + lifetime)
+        return OAuthToken(access, refresh, time.time() + float(lifetime))
 
 
 class GoogleCredentialStore:
-    """Store the desktop token in the operating system credential vault."""
+    """Store the desktop token in the OS credential vault or a local data file."""
 
     def save(self, client: OAuthClient, token: OAuthToken) -> None:
         """Save credentials without placing a token in a project or source file."""
+        payload = json.dumps({"client": asdict(client), "token": asdict(token)})
+        if keyring is not None:
+            try:
+                keyring.set_password(KEYRING_SERVICE, KEYRING_USER, payload)
+                return
+            except Exception:
+                logger.debug("OS keyring unavailable; storing credentials in the user data path")
         try:
-            keyring.set_password(
-                KEYRING_SERVICE, KEYRING_USER, json.dumps({"client": asdict(client), "token": asdict(token)})
-            )
-        except Exception as exc:
+            path = self._tokenPath()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(payload, encoding="utf-8")
+        except OSError as exc:
             raise GoogleAuthError("Could not store Google credentials securely") from exc
 
     def remote(self) -> GoogleDriveRemote:
         """Return an authenticated Drive remote, refreshing its token when needed."""
+        client, token = self._load()
+        if token.isExpired:
+            token = GoogleOAuth.refresh(client, token)
+            self.save(client, token)
+        return GoogleDriveRemote(token.accessToken)
+
+    def isConnected(self) -> bool:
+        """Return whether credentials were previously configured."""
         try:
-            raw = keyring.get_password(KEYRING_SERVICE, KEYRING_USER)
+            return self._readRaw() is not None
+        except Exception:
+            return False
+
+    def clear(self) -> None:
+        """Remove stored credentials from the keyring and the file fallback."""
+        if keyring is not None:
+            with contextlib.suppress(Exception):
+                keyring.delete_password(KEYRING_SERVICE, KEYRING_USER)
+        path = self._tokenPath()
+        if path.is_file():
+            with contextlib.suppress(OSError):
+                path.unlink()
+
+    def _load(self) -> tuple[OAuthClient, OAuthToken]:
+        try:
+            raw = self._readRaw()
             if not raw:
                 raise GoogleAuthError("Connect Google Drive before synchronising")
             data = json.loads(raw)
@@ -214,17 +254,24 @@ class GoogleCredentialStore:
             raise
         except Exception as exc:
             raise GoogleAuthError("Connect Google Drive before synchronising") from exc
-        if token.isExpired:
-            token = GoogleOAuth.refresh(client, token)
-            self.save(client, token)
-        return GoogleDriveRemote(token.accessToken)
+        return client, token
 
-    def isConnected(self) -> bool:
-        """Return whether credentials were previously configured."""
-        try:
-            return keyring.get_password(KEYRING_SERVICE, KEYRING_USER) is not None
-        except Exception:
-            return False
+    def _readRaw(self) -> str | None:
+        if keyring is not None:
+            try:
+                value = keyring.get_password(KEYRING_SERVICE, KEYRING_USER)
+                if value:
+                    return value
+            except Exception:
+                logger.debug("OS keyring unavailable while reading credentials")
+        path = self._tokenPath()
+        if path.is_file():
+            return path.read_text(encoding="utf-8")
+        return None
+
+    @staticmethod
+    def _tokenPath() -> Path:
+        return CONFIG.dataPath(TOKEN_FILE)
 
 
 class _CallbackServer(HTTPServer):

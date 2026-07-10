@@ -58,7 +58,8 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: true
+          # Forks without CODECOV_TOKEN should not fail the whole matrix
+          fail_ci_if_error: false
 
   testUbuntu24:
     name: Test Ubuntu 24.04 & Sys Packages
@@ -80,6 +81,8 @@ jobs:
             python3-enchant \
             python3-pytest-timeout \
             qt6-image-formats-plugins
+          # Optional: present on most Ubuntu images; sync falls back to a file store without it
+          sudo apt install -y python3-keyring || true
 
       - name: Build Assets
         run: |
@@ -110,6 +113,8 @@ jobs:
             python3-pytest-timeout \
             qt6-linguist \
             qt6-qtimageformats
+          # Optional: sync falls back to a file store without keyring
+          dnf -y install python3-keyring || true
 
       - name: Checkout Source
         uses: actions/checkout@v7

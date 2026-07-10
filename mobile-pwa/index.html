@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="en-GB">
   <head>
     <meta charset="utf-8" />
     <title>novelWriter · Mobile</title>
@@ -12,58 +12,59 @@
     <header>
       <div>
         <h1>novelWriter</h1>
-        <div class="subtitle">Companion móvel — sincronizado via Google Drive</div>
+        <div class="subtitle">Mobile companion — synchronised via Google Drive</div>
       </div>
     </header>
 
     <section class="section" data-section="connect">
       <div class="card">
-        <h2>Conectar</h2>
+        <h2>Connect</h2>
         <p class="muted">
-          Abra este aplicativo no celular, cole o seu OAuth Client ID do Google,
-          digite o UUID do projeto (em <code>Configurações do Projeto</code> no desktop) e conecte-se.
+          Open this app on your phone, paste your Google OAuth Client ID,
+          enter the project UUID (shown under <code>Project Settings</code> on the desktop), and connect.
         </p>
         <label class="muted" for="client-id">Google OAuth Client ID</label>
         <input id="client-id" type="text" data-client-id placeholder="xxxxxxxxxxxx.apps.googleusercontent.com" />
 
         <label class="muted" for="project-id">Project UUID</label>
-        <input id="project-id" type="text" data-project-id placeholder="Cole aqui o UUID do projeto" />
+        <input id="project-id" type="text" data-project-id placeholder="Paste the project UUID here" />
 
         <div class="row" style="margin-top:0.75rem;">
-          <button data-connect-btn>Conectar com Google</button>
+          <button data-connect-btn>Connect with Google</button>
         </div>
         <div class="status info" data-status="connect" style="margin-top:0.75rem;">
-          Aguardando configuração.
+          Waiting for configuration.
         </div>
       </div>
     </section>
 
     <section class="section" data-section="notes">
       <div class="card">
-        <h2>Snapshot mais recente</h2>
+        <h2>Latest snapshot</h2>
         <div class="row">
-          <button class="secondary" data-load-snapshot>Atualizar do Drive</button>
+          <button class="secondary" data-load-snapshot>Refresh from Drive</button>
         </div>
         <div class="status info" data-status="notes" style="margin-top:0.5rem;">
-          Sincronização manual.
+          Manual synchronisation.
         </div>
-        <pre data-snapshot class="muted" style="white-space: pre-wrap; margin-top:0.75rem;">Nenhum documento carregado.</pre>
+        <pre data-snapshot class="muted" style="white-space: pre-wrap; margin-top:0.75rem;">No document loaded.</pre>
       </div>
 
       <div class="card">
-        <h2>Anotações rápidas</h2>
-        <textarea data-note-input rows="4" placeholder="Ideias, cenas, referências..."></textarea>
+        <h2>Quick notes</h2>
+        <textarea data-note-input rows="4" placeholder="Ideas, scenes, references..."></textarea>
         <div class="row" style="margin-top:0.5rem;">
-          <button data-add-note>Salvar nota</button>
-          <button class="secondary" data-export-notes>Exportar JSON</button>
-          <button class="secondary" data-clear-notes>Limpar tudo</button>
+          <button data-add-note>Save note</button>
+          <button class="secondary" data-export-notes>Export JSON</button>
+          <button class="secondary" data-clear-notes>Clear all</button>
         </div>
         <ul class="list" data-notes-list style="margin-top:0.75rem;"></ul>
       </div>
     </section>
 
     <footer class="muted" style="text-align:center;">
-      As notas vivem só neste dispositivo até serem sincronizadas pelo desktop.
+      Notes stay on this device until they are synchronised from the desktop.
     </footer>
+    <script src="./app.js"></script>
   </body>
 </html>
