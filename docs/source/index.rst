@@ -88,5 +88,6 @@ storage for robustness.
 
    technical/locations
    technical/storage
+   technical/synchronisation
    technical/source
    technical/tests

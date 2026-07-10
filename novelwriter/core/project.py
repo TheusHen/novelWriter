@@ -45,6 +45,7 @@ from novelwriter.common import (
 )
 from novelwriter.constants import nwLabels, trConst
 from novelwriter.core.index import Index
+from novelwriter.core.nonfiction import NOTEBOOK_FILE, NonfictionNotebook
 from novelwriter.core.options import OptionState
 from novelwriter.core.projectdata import ProjectData
 from novelwriter.core.projectxml import ProjectXMLReader, ProjectXMLWriter, XMLReadState
@@ -81,6 +82,7 @@ class NWProject:
         "_data",
         "_index",
         "_langData",
+        "_nonfiction",
         "_options",
         "_session",
         "_state",
@@ -98,6 +100,7 @@ class NWProject:
         self._data = ProjectData(self)  # The project settings
         self._tree = ProjectTree(self)  # The project tree
         self._index = Index(self)  # The project index
+        self._nonfiction = NonfictionNotebook()  # The portable research notebook
         self._session = SessionLog(self)  # The session record
 
         # Project Status
@@ -143,6 +146,11 @@ class NWProject:
     @property
     def index(self) -> Index:
         return self._index
+
+    @property
+    def nonfiction(self) -> NonfictionNotebook:
+        """Return the project's non-fiction notebook."""
+        return self._nonfiction
 
     @property
     def session(self) -> SessionLog:
@@ -382,6 +390,7 @@ class NWProject:
 
         self._tree.unpack(projContent)
         self._options.loadSettings()
+        self._nonfiction.load(self._storage.getMetaFile(NOTEBOOK_FILE))
         self._loadProjectLocalisation()
 
         # Update recent projects
@@ -451,6 +460,9 @@ class NWProject:
         # Save other project data
         self._options.saveSettings()
         self._index.saveIndex()
+        if not self._nonfiction.save():
+            SHARED.error(self.tr("Could not save non-fiction project data."))
+            return False
         self._storage.runPostSaveTasks(autoSave=autoSave)
 
         # Update recent projects
@@ -472,9 +484,102 @@ class NWProject:
         self._index.clear()  # Triggers clear signal, see #1718
         self._options.saveSettings()
         self._tree.writeToCFile()
+        self._nonfiction.save()
         self._session.appendSession(idleTime)
         self._storage.closeSession()
         self._reportErrors(self.tr("Issues encountered when closing project:"))
+
+    def createNonfictionWorkspace(self) -> bool:
+        """Create topic-led writing and research spaces for non-fiction."""
+        if not self._storage.isOpen() or self._nonfiction.enabled:
+            return False
+
+        metaPath = self._storage.getMetaFile(NOTEBOOK_FILE)
+        if metaPath is None:
+            return False
+        self._nonfiction.enable(metaPath)
+
+        manuscript = self._tree.create("Manuscript", None, nwItemType.ROOT, nwItemClass.NOVEL)
+        research = self._tree.create("Research and Evidence", None, nwItemType.ROOT, nwItemClass.CUSTOM)
+        timeline = self._tree.create("Chronology", None, nwItemType.ROOT, nwItemClass.TIMELINE)
+        journal = self._tree.create("Process Journal", None, nwItemType.ROOT, nwItemClass.ARCHIVE)
+        exercises = self._tree.create("Reader Exercises", None, nwItemType.ROOT, nwItemClass.CUSTOM)
+        scope = self._tree.create("Experience and Claims", None, nwItemType.ROOT, nwItemClass.CUSTOM)
+        if not (
+            isinstance(manuscript, str)
+            and isinstance(research, str)
+            and isinstance(timeline, str)
+            and isinstance(journal, str)
+            and isinstance(exercises, str)
+            and isinstance(scope, str)
+        ):
+            return False
+
+        chapters = self.newFolder("Chapters by Theme", manuscript)
+        sources = self.newFolder("Sources and References", research)
+        interviews = self.newFolder("Interviews", research)
+        data = self.newFolder("Data and Evidence", research)
+        method = self.newFolder("Hypotheses and Results", research)
+        if not (
+            isinstance(chapters, str)
+            and isinstance(sources, str)
+            and isinstance(interviews, str)
+            and isinstance(data, str)
+            and isinstance(method, str)
+        ):
+            return False
+
+        self._addNonfictionFile(
+            "Introduction", chapters, True, "## Central Question\n\n## Main Claim\n\n## Reader Promise\n"
+        )
+        self._addNonfictionFile(
+            "Theme Chapter", chapters, True, "## Claim\n\n## Evidence\n\n## Counterargument\n\n## Takeaway\n"
+        )
+        self._addNonfictionFile(
+            "Sources and References",
+            sources,
+            False,
+            "## Bibliography\n\n- [@source-key] Author. *Title*. Publisher, year. URL.\n",
+        )
+        self._addNonfictionFile(
+            "Interview Template",
+            interviews,
+            False,
+            "## Participant\n\n## Consent and Context\n\n## Transcript\n\n## Verifiable Claims\n",
+        )
+        self._addNonfictionFile(
+            "Evidence Register",
+            data,
+            False,
+            "## Evidence\n\n| Claim | Source | Method | Confidence |\n| --- | --- | --- | --- |\n",
+        )
+        self._addNonfictionFile(
+            "Hypotheses, Attempts and Results",
+            method,
+            False,
+            "## Hypothesis\n\n## Attempt\n\n## Result\n\n## What Changed\n",
+        )
+        self._addNonfictionFile(
+            "Chronology",
+            timeline,
+            False,
+            "## Events\n\n| Date | Event | Source | Certainty |\n| --- | --- | --- | --- |\n",
+        )
+        self._addNonfictionFile("Journal", journal, False, "## Today\n\n- Decision:\n- Doubt:\n- Next experiment:\n")
+        self._addNonfictionFile("Exercises", exercises, False, "## Exercise\n\n1. \n\n- [ ] Reflection completed\n")
+        self._addNonfictionFile(
+            "Personal Experience and General Claims",
+            scope,
+            False,
+            "## Personal Experience\n\n## General Claim\n\n## Evidence and Limits\n",
+        )
+        self.setProjectChanged(True)
+        return True
+
+    def _addNonfictionFile(self, name: str, parent: str, isDocument: bool, text: str) -> None:
+        """Create one non-fiction starter document."""
+        if handle := self.newFile(name, parent):
+            self.writeNewFile(handle, 1, isDocument, text)
 
     def backupProject(self, doNotify: bool) -> bool:
         """Create a zip file of the entire project."""

@@ -178,6 +178,10 @@ class GuiMainMenu(QMenuBar):
         self.aProjectSettings.setShortcut("Ctrl+Shift+,")
         self.aProjectSettings.triggered.connect(self.mainGui.showProjectSettingsDialog)
 
+        # Project > Create Non-Fiction Workspace
+        self.aNonfictionWorkspace = qtAddAction(self.projMenu, self.tr("Create Non-Fiction Workspace"))
+        self.aNonfictionWorkspace.triggered.connect(self.mainGui.createNonfictionWorkspace)
+
         # Project > Novel Details
         self.aNovelDetails = qtAddAction(self.projMenu, self.tr("Novel Details"))
         self.aNovelDetails.setShortcut("Shift+F6")

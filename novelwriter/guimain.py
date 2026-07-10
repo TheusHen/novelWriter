@@ -505,6 +505,25 @@ class GuiMain(QMainWindow):
             return SHARED.saveProject(autoSave=autoSave)
         return False
 
+    def createNonfictionWorkspace(self) -> None:
+        """Add the topic-led non-fiction starter workspace to this project."""
+        if not SHARED.hasProject:
+            return
+        if SHARED.project.nonfiction.enabled:
+            SHARED.info(self.tr("This project already has a non-fiction workspace."))
+            return
+        if not SHARED.question(
+            self.tr("Create a non-fiction workspace in this project?"),
+            info=self.tr("It adds manuscript, research, chronology, journal, exercise and claim templates."),
+        ):
+            return
+        self.saveDocument()
+        if not SHARED.project.createNonfictionWorkspace():
+            SHARED.error(self.tr("Could not create the non-fiction workspace."))
+            return
+        self.saveProject()
+        SHARED.info(self.tr("Created the non-fiction workspace."))
+
     ##
     #  Document Actions
     ##
