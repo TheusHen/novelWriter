@@ -8,12 +8,14 @@ const STORAGE = {
   TOKEN: "novelwriter:googleToken",
   PROJECT_ID: "novelwriter:projectId",
   DEVICE_ID: "novelwriter:deviceId",
-  CLIENT_ID: "novelwriter:googleClientId"
+  CLIENT_ID: "novelwriter:googleClientId",
+  AUTH_VERSION: "novelwriter:googleAuthVersion"
 };
 
 const SCOPES = ["https://www.googleapis.com/auth/drive.appdata"];
 const TOKEN_SKEW_MS = 60_000;
 const GOOGLE_GSI_URL = "https://accounts.google.com/gsi/client";
+const GOOGLE_AUTH_VERSION = "token-popup-v3";
 let googleIdentityPromise = null;
 
 const state = {
@@ -86,6 +88,13 @@ function escapeHtml(text) {
   })[char]);
 }
 
+function migrateGoogleAuth() {
+  if (localStorage.getItem(STORAGE.AUTH_VERSION) === GOOGLE_AUTH_VERSION) return;
+  localStorage.removeItem(STORAGE.CLIENT_ID);
+  localStorage.removeItem(STORAGE.TOKEN);
+  localStorage.setItem(STORAGE.AUTH_VERSION, GOOGLE_AUTH_VERSION);
+}
+
 function loadGoogleIdentityServices() {
   if (window.google?.accounts?.oauth2) return Promise.resolve();
   if (!googleIdentityPromise) {
@@ -136,9 +145,8 @@ function saveToken(response) {
   return token;
 }
 
-async function requestAccessToken(prompt = "") {
+async function requestAccessToken(clientId, prompt = "") {
   await loadGoogleIdentityServices();
-  const clientId = localStorage.getItem(STORAGE.CLIENT_ID);
   if (!clientId) throw new Error("Enter the Google OAuth Client ID first.");
 
   return new Promise((resolve, reject) => {
@@ -189,12 +197,12 @@ async function startGoogleAuth() {
     return;
   }
 
-  localStorage.setItem(STORAGE.CLIENT_ID, clientId);
   localStorage.setItem(STORAGE.PROJECT_ID, projectId);
   ensureDeviceId();
   setStatus("connect", "Opening Google authorisation…", "info");
   try {
-    await requestAccessToken("consent");
+    await requestAccessToken(clientId, "consent");
+    localStorage.setItem(STORAGE.CLIENT_ID, clientId);
     state.connected = true;
     state.projectId = projectId;
     setStatus("connect", "Connected to Google Drive.", "good");
@@ -207,7 +215,8 @@ async function startGoogleAuth() {
 async function getAccessToken() {
   const token = readToken();
   if (token && token.expiresAt > Date.now() + TOKEN_SKEW_MS) return token.accessToken;
-  const refreshed = await requestAccessToken();
+  const clientId = localStorage.getItem(STORAGE.CLIENT_ID);
+  const refreshed = await requestAccessToken(clientId);
   return refreshed.accessToken;
 }
 
@@ -316,8 +325,11 @@ function exportNotes() {
 
 function boot() {
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./service-worker.js").catch(() => {});
+    navigator.serviceWorker.register("./service-worker.js", { updateViaCache: "none" })
+      .then((registration) => registration.update())
+      .catch(() => {});
   }
+  migrateGoogleAuth();
   ensureDeviceId();
   state.notes = loadNotes();
   renderNotes();

@@ -5,7 +5,7 @@
     <title>novelWriter · Mobile</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <link rel="manifest" href="./manifest.webmanifest" />
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=3" />
     <meta name="theme-color" content="#1f1f24" />
   </head>
   <body>
@@ -37,9 +37,9 @@
           Waiting for configuration.
         </div>
         <p class="muted help-text">
-          In Google Cloud Console, add <code>https://theushen.github.io</code> to
-          <strong>Authorized JavaScript origins</strong>. This PWA uses Google Identity Services
-          and does not use a redirect URI.
+          Google Cloud setup: create a separate <strong>Web application</strong> client, add
+          <code>https://theushen.github.io</code> to <strong>Authorized JavaScript origins</strong>,
+          and leave <strong>Authorized redirect URIs</strong> empty. Do not use the desktop Client ID.
         </p>
       </div>
     </section>
@@ -71,6 +71,6 @@
     <footer class="muted" style="text-align:center;">
       Notes stay on this device until they are synchronised from the desktop.
     </footer>
-    <script src="./app.js"></script>
+    <script src="./app.js?v=3"></script>
   </body>
 </html>
