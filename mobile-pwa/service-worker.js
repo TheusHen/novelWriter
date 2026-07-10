@@ -1,13 +1,15 @@
 // novelWriter Mobile PWA — Service Worker
 // Stores a recent snapshot of the last synced manuscript and queues offline notes.
 
-const CACHE = "novelwriter-mobile-v1";
+const CACHE = "novelwriter-mobile-v2";
 const PRECACHE = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
-  "./manifest.webmanifest"
+  "./manifest.webmanifest",
+  "./icons/icon-192.svg",
+  "./icons/icon-512.svg"
 ];
 
 self.addEventListener("install", (event) => {
@@ -28,7 +30,7 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const { request } = event;
-  if (request.method !== "GET") {
+  if (request.method !== "GET" || new URL(request.url).origin !== self.location.origin) {
     return;
   }
   event.respondWith(
@@ -42,7 +44,7 @@ self.addEventListener("fetch", (event) => {
           caches.open(CACHE).then((cache) => cache.put(request, copy));
           return response;
         })
-        .catch(() => caches.match("./index.html"));
+        .catch(() => request.mode === "navigate" ? caches.match("./index.html") : Response.error());
     })
   );
 });

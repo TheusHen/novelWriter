@@ -1,8 +1,6 @@
 // novelWriter Mobile — companion app
-//
-// This Progressive Web App is the mobile half of the cross-device workflow.
-// It pulls the latest project snapshot from Google Drive (via OAuth),
-// lets the user sketch notes anywhere, and queues them for the next sync.
+// This Progressive Web App reads the latest project snapshot from Google Drive
+// and keeps quick notes on the device.
 
 const STORAGE = {
   NOTES: "novelwriter:notes",
@@ -10,9 +8,13 @@ const STORAGE = {
   TOKEN: "novelwriter:googleToken",
   PROJECT_ID: "novelwriter:projectId",
   DEVICE_ID: "novelwriter:deviceId",
-  CLIENT_ID: "novelwriter:googleClientId",
-  CODE_VERIFIER: "novelwriter:codeVerifier"
+  CLIENT_ID: "novelwriter:googleClientId"
 };
+
+const SCOPES = ["https://www.googleapis.com/auth/drive.appdata"];
+const TOKEN_SKEW_MS = 60_000;
+const GOOGLE_GSI_URL = "https://accounts.google.com/gsi/client";
+let googleIdentityPromise = null;
 
 const state = {
   connected: false,
@@ -21,13 +23,12 @@ const state = {
   notes: []
 };
 
-const SCOPES = ["https://www.googleapis.com/auth/drive.appdata"];
-
 function ensureDeviceId() {
   let id = localStorage.getItem(STORAGE.DEVICE_ID);
   if (!id) {
-    id = (crypto.randomUUID && crypto.randomUUID()) ||
-      `web-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+    id = typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `web-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
     localStorage.setItem(STORAGE.DEVICE_ID, id);
   }
   return id;
@@ -35,7 +36,10 @@ function ensureDeviceId() {
 
 function loadNotes() {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE.NOTES)) || [];
+    const notes = JSON.parse(localStorage.getItem(STORAGE.NOTES) || "[]");
+    return Array.isArray(notes)
+      ? notes.filter((note) => note && typeof note.text === "string")
+      : [];
   } catch (err) {
     return [];
   }
@@ -66,14 +70,14 @@ function renderNotes() {
     li.className = "list-item";
     li.innerHTML = `
       <div>${escapeHtml(note.text)}</div>
-      <div class="entry-meta">${new Date(note.createdAt).toLocaleString()} · ${note.id.slice(0, 8)}</div>
+      <div class="entry-meta">${new Date(note.createdAt).toLocaleString()} · ${String(note.id || "").slice(0, 8)}</div>
     `;
     list.appendChild(li);
   });
 }
 
 function escapeHtml(text) {
-  return text.replace(/[&<>"']/g, (char) => ({
+  return String(text ?? "").replace(/[&<>"']/g, (char) => ({
     "&": "&amp;",
     "<": "&lt;",
     ">": "&gt;",
@@ -82,16 +86,95 @@ function escapeHtml(text) {
   })[char]);
 }
 
-function base64UrlEncode(buffer) {
-  let str = "";
-  for (const byte of new Uint8Array(buffer)) {
-    str += String.fromCharCode(byte);
+function loadGoogleIdentityServices() {
+  if (window.google?.accounts?.oauth2) return Promise.resolve();
+  if (!googleIdentityPromise) {
+    googleIdentityPromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = GOOGLE_GSI_URL;
+      script.async = true;
+      script.onload = resolve;
+      script.onerror = () => {
+        googleIdentityPromise = null;
+        reject(new Error("Could not load Google Identity Services."));
+      };
+      document.head.appendChild(script);
+    });
   }
-  return btoa(str).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+  return googleIdentityPromise.then(() => {
+    if (!window.google?.accounts?.oauth2) {
+      throw new Error("Google Identity Services is unavailable.");
+    }
+  });
 }
 
-async function sha256Buffer(value) {
-  return crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+function readToken() {
+  try {
+    const token = JSON.parse(localStorage.getItem(STORAGE.TOKEN) || "null");
+    if (token && typeof token.accessToken === "string" && token.accessToken &&
+        Number.isFinite(token.expiresAt)) {
+      return token;
+    }
+  } catch (err) {
+    // Remove malformed data below
+  }
+  localStorage.removeItem(STORAGE.TOKEN);
+  return null;
+}
+
+function saveToken(response) {
+  const expiresIn = Number(response.expires_in);
+  if (typeof response.access_token !== "string" || !response.access_token ||
+      !Number.isFinite(expiresIn) || expiresIn <= 0) {
+    throw new Error("Google returned an invalid access token.");
+  }
+  const token = {
+    accessToken: response.access_token,
+    expiresAt: Date.now() + expiresIn * 1000
+  };
+  localStorage.setItem(STORAGE.TOKEN, JSON.stringify(token));
+  return token;
+}
+
+async function requestAccessToken(prompt = "") {
+  await loadGoogleIdentityServices();
+  const clientId = localStorage.getItem(STORAGE.CLIENT_ID);
+  if (!clientId) throw new Error("Enter the Google OAuth Client ID first.");
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      callback(value);
+    };
+    const client = window.google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: SCOPES.join(" "),
+      callback: (response) => {
+        if (response.error) {
+          finish(reject, new Error(response.error_description || response.error));
+          return;
+        }
+        try {
+          finish(resolve, saveToken(response));
+        } catch (err) {
+          finish(reject, err);
+        }
+      },
+      error_callback: (response) => {
+        const message = response.type === "popup_closed"
+          ? "Google authorisation was cancelled."
+          : "Google authorisation popup could not be opened.";
+        finish(reject, new Error(message));
+      }
+    });
+    try {
+      client.requestAccessToken(prompt ? { prompt } : {});
+    } catch (err) {
+      finish(reject, err);
+    }
+  });
 }
 
 async function startGoogleAuth() {
@@ -109,95 +192,38 @@ async function startGoogleAuth() {
   localStorage.setItem(STORAGE.CLIENT_ID, clientId);
   localStorage.setItem(STORAGE.PROJECT_ID, projectId);
   ensureDeviceId();
-
-  const verifier = base64UrlEncode(crypto.getRandomValues(new Uint8Array(48)));
-  localStorage.setItem(STORAGE.CODE_VERIFIER, verifier);
-  const challenge = base64UrlEncode(await sha256Buffer(verifier));
-
-  const redirect = `${location.origin}${location.pathname}`;
-  const params = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: redirect,
-    response_type: "code",
-    scope: SCOPES.join(" "),
-    access_type: "offline",
-    prompt: "consent",
-    code_challenge: challenge,
-    code_challenge_method: "S256",
-    state: projectId
-  });
-  location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+  setStatus("connect", "Opening Google authorisation…", "info");
+  try {
+    await requestAccessToken("consent");
+    state.connected = true;
+    state.projectId = projectId;
+    setStatus("connect", "Connected to Google Drive.", "good");
+    showSection("notes");
+  } catch (err) {
+    setStatus("connect", `Could not connect: ${err.message}`, "bad");
+  }
 }
 
-async function exchangeCodeForToken(code, projectId) {
-  const verifier = localStorage.getItem(STORAGE.CODE_VERIFIER);
-  if (!verifier) {
-    return;
-  }
-  const clientId = localStorage.getItem(STORAGE.CLIENT_ID);
-  if (!clientId) {
-    return;
-  }
-  const body = new URLSearchParams({
-    client_id: clientId,
-    code,
-    code_verifier: verifier,
-    grant_type: "authorization_code",
-    redirect_uri: `${location.origin}${location.pathname}`
-  });
-  const response = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body
-  });
-  if (!response.ok) {
-    setStatus("connect", "Failed to exchange the authorisation code for a token.", "bad");
-    return;
-  }
-  const data = await response.json();
-  const token = {
-    accessToken: data.access_token,
-    refreshToken: data.refresh_token,
-    expiresAt: Date.now() + (data.expires_in * 1000)
-  };
-  localStorage.setItem(STORAGE.TOKEN, JSON.stringify(token));
-  localStorage.removeItem(STORAGE.CODE_VERIFIER);
-  state.connected = true;
-  state.projectId = projectId;
-  setStatus("connect", "Connected to Google Drive.", "good");
-  showSection("notes");
+async function getAccessToken() {
+  const token = readToken();
+  if (token && token.expiresAt > Date.now() + TOKEN_SKEW_MS) return token.accessToken;
+  const refreshed = await requestAccessToken();
+  return refreshed.accessToken;
 }
 
-async function refreshToken() {
-  const raw = localStorage.getItem(STORAGE.TOKEN);
-  if (!raw) return null;
-  const token = JSON.parse(raw);
-  if (token.expiresAt > Date.now() + 60_000) {
-    return token.accessToken;
+function disconnectGoogle() {
+  const token = readToken();
+  if (token && window.google?.accounts?.oauth2) {
+    window.google.accounts.oauth2.revoke(token.accessToken, () => {});
   }
-  const clientId = localStorage.getItem(STORAGE.CLIENT_ID);
-  if (!clientId || !token.refreshToken) return null;
-  const body = new URLSearchParams({
-    client_id: clientId,
-    refresh_token: token.refreshToken,
-    grant_type: "refresh_token"
-  });
-  const response = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body
-  });
-  if (!response.ok) return null;
-  const data = await response.json();
-  token.accessToken = data.access_token;
-  token.expiresAt = Date.now() + (data.expires_in * 1000);
-  localStorage.setItem(STORAGE.TOKEN, JSON.stringify(token));
-  return token.accessToken;
+  localStorage.removeItem(STORAGE.TOKEN);
+  state.connected = false;
+  showSection("connect");
+  setStatus("connect", "Disconnected from Google Drive.", "info");
 }
 
 async function callDrive(path, init = {}) {
-  const token = await refreshToken();
-  if (!token) throw new Error("Not connected to Google Drive.");
+  const token = await getAccessToken();
   const headers = Object.assign({ Authorization: `Bearer ${token}` }, init.headers || {});
   const response = await fetch(`https://www.googleapis.com/drive/v3${path}`, {
     ...init,
@@ -249,6 +275,7 @@ async function loadSnapshot() {
       preview += `### ${path}\n\n${obj.split("\n").slice(0, 12).join("\n")}\n\n`;
     }
     state.snapshot = preview;
+    localStorage.setItem(STORAGE.SNAPSHOT, preview);
     document.querySelector("[data-snapshot]").textContent = preview || "No readable document found.";
     setStatus("notes", "Snapshot loaded.", "good");
   } catch (err) {
@@ -260,9 +287,8 @@ function addNote() {
   const textarea = document.querySelector("[data-note-input]");
   const text = textarea.value.trim();
   if (!text) return;
-  state.notes = loadNotes();
   state.notes.unshift({
-    id: crypto.randomUUID ? crypto.randomUUID() : `n-${Date.now()}`,
+    id: typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `n-${Date.now()}`,
     text,
     createdAt: new Date().toISOString()
   });
@@ -285,7 +311,7 @@ function exportNotes() {
   a.href = url;
   a.download = "novelwriter-notes.json";
   a.click();
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function boot() {
@@ -298,32 +324,23 @@ function boot() {
 
   const savedClient = localStorage.getItem(STORAGE.CLIENT_ID);
   const savedProject = localStorage.getItem(STORAGE.PROJECT_ID);
-  if (savedClient) {
-    document.querySelector("[data-client-id]").value = savedClient;
-  }
-  if (savedProject) {
-    document.querySelector("[data-project-id]").value = savedProject;
-  }
+  if (savedClient) document.querySelector("[data-client-id]").value = savedClient;
+  if (savedProject) document.querySelector("[data-project-id]").value = savedProject;
 
-  const params = new URLSearchParams(location.search);
-  const code = params.get("code");
-  const stateParam = params.get("state");
-  if (code && stateParam) {
-    exchangeCodeForToken(code, stateParam);
-    history.replaceState(null, "", location.pathname);
-    return;
-  }
+  const savedSnapshot = localStorage.getItem(STORAGE.SNAPSHOT);
+  if (savedSnapshot) document.querySelector("[data-snapshot]").textContent = savedSnapshot;
 
-  const token = localStorage.getItem(STORAGE.TOKEN);
-  if (token) {
+  const token = readToken();
+  if (token && savedProject) {
     state.connected = true;
-    state.projectId = localStorage.getItem(STORAGE.PROJECT_ID);
+    state.projectId = savedProject;
     showSection("notes");
   } else {
     showSection("connect");
   }
 
   document.querySelector("[data-connect-btn]").addEventListener("click", startGoogleAuth);
+  document.querySelector("[data-disconnect-btn]").addEventListener("click", disconnectGoogle);
   document.querySelector("[data-load-snapshot]").addEventListener("click", loadSnapshot);
   document.querySelector("[data-add-note]").addEventListener("click", addNote);
   document.querySelector("[data-clear-notes]").addEventListener("click", clearNotes);

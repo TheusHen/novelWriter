@@ -16,6 +16,15 @@ Cloud project and request only the ``https://www.googleapis.com/auth/drive.appda
 scope. This stores novelWriter data in Drive's hidden application-data folder;
 the application never asks for access to the user's visible files.
 
+The desktop application uses a **Desktop** OAuth client and a loopback callback.
+The mobile PWA uses a **Web application** OAuth client with Google Identity
+Services. For the published companion, add ``https://theushen.github.io`` to
+**Authorised JavaScript origins** in Google Cloud Console. Do not add the PWA
+path as a redirect URI: the token popup flow does not use a redirect URI.
+
+The Google Drive API must be enabled, and the OAuth consent screen must include
+the accounts that will use the app when it is still in testing mode.
+
 OAuth client identifiers and refresh tokens are private credentials. They must
 not be committed to the source repository. A distribution must configure its
 own consent screen, Android signing certificate and desktop OAuth client.
